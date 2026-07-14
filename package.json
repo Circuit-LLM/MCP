@@ -1,0 +1,52 @@
+{
+  "name": "@circuit-llm/mcp",
+  "version": "0.1.0",
+  "description": "Circuit MCP — real-time Solana data + agent-swarm intelligence as x402-paid tools for any AI agent. No API keys.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "circuit-mcp": "bin/circuit-mcp.js"
+  },
+  "main": "src/server.js",
+  "exports": {
+    ".": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node bin/circuit-mcp.js",
+    "smoke": "node test/smoke.mjs"
+  },
+  "dependencies": {
+    "@circuit-llm/data": "^0.2.5",
+    "@circuit-llm/wallet": "^0.2.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0 || ^4.0.0"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Circuit-LLM/MCP.git"
+  },
+  "homepage": "https://github.com/Circuit-LLM/MCP#readme",
+  "bugs": {
+    "url": "https://github.com/Circuit-LLM/MCP/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "solana",
+    "x402",
+    "circuit",
+    "ai-agents",
+    "crypto"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
