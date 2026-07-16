@@ -19,9 +19,9 @@ try {
 
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  check(tools.length >= 24, `listed ${tools.length} tools`, names.join(', '));
+  check(tools.length >= 29, `listed ${tools.length} tools`, names.join(', '));
   check(names.includes('swarm_feed') && names.includes('token_security'), 'core tools present');
-  check(['swarm_leaderboard', 'swarm_holdings', 'swarm_blacklist_check', 'swarm_insights', 'wallet_pnl', 'slippage_buy', 'new_tokens', 'market_regime'].every((n) => names.includes(n)), 'new tools registered');
+  check(['swarm_leaderboard', 'swarm_holdings', 'swarm_blacklist_check', 'swarm_insights', 'wallet_pnl', 'slippage_buy', 'new_tokens', 'market_regime', 'token_top_traders'].every((n) => names.includes(n)), 'new tools registered');
   check(tools.every((t) => t.annotations?.readOnlyHint === true), 'all tools annotated read-only');
 
   const q = await client.callTool({ name: 'circuit_quote', arguments: {} });

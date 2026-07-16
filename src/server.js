@@ -8,7 +8,7 @@
 // call auto-pays CIRC to the Circuit treasury, capped per call. Free tools need no wallet. This is the
 // "bring-your-own-wallet" MCP — drop it into Claude Desktop / an agent runtime, fund a CIRC wallet, done.
 //
-// Surface: 28 tools (14 free), 3 guided prompts, and 5 free ambient resources. The differentiator is the
+// Surface: 29 tools (14 free), 3 guided prompts, and 5 free ambient resources. The differentiator is the
 // swarm_* family — live signal/consensus/leaderboard/holdings/blacklist from Circuit's running agent fleet,
 // data no generic price API has. Every tool is READ-ONLY (a fetch); the only side effect is the micropayment.
 //
@@ -124,7 +124,7 @@ export function buildServer(opts = {}) {
     baseUrl: env.CIRCUIT_DATA_URL || undefined,
   });
 
-  const server = new McpServer({ name: 'circuit-data', version: '0.2.0' });
+  const server = new McpServer({ name: 'circuit-data', version: '0.2.1' });
 
   const asText = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o, null, 2) }] });
   const asError = (m) => ({ content: [{ type: 'text', text: `Error: ${m}` }], isError: true });
@@ -282,6 +282,11 @@ export function buildServer(opts = {}) {
     'token_holders',
     { title: 'Holder concentration', description: '~$0.005 in CIRC. Holder count + top-5/10/20 supply concentration (a key rug/whale signal).', inputSchema: { mint: z.string() } },
     ({ mint }) => data.tokenHolders(mint),
+  );
+  tool(
+    'token_top_traders',
+    { title: 'Top traders', description: '~$0.005 in CIRC. Top traders of a token by volume (Birdeye): wallet, whale/smart-money tags, buy/sell trade counts, and USD volume — a smart-money signal.', inputSchema: { mint: z.string(), limit: z.number().int().max(20).optional().describe('max traders (default 10)'), window: z.enum(['30m', '1h', '2h', '4h', '6h', '8h', '12h', '24h']).optional().describe('time window (default 24h)') } },
+    ({ mint, limit, window }) => data.get('/api/token-top-traders', { mint, limit, window }),
   );
   tool(
     'trending',

@@ -22,7 +22,7 @@ A thin [Model Context Protocol](https://modelcontextprotocol.io) server over [`@
 
 The differentiator is the **`swarm_*`** tools: live signals, consensus, leaderboard, holdings, and a crowd-sourced rug blacklist from Circuit's running trading-agent fleet — data no generic price API has.
 
-**28 tools (14 free), 3 guided prompts, and 5 free ambient resources.** Every tool is read-only.
+**29 tools (14 free), 3 guided prompts, and 5 free ambient resources.** Every tool is read-only.
 
 ## Quick Start
 
@@ -72,6 +72,7 @@ Then ask your agent *"what's the swarm's consensus on this mint?"* or *"audit th
 | `token_overview` | ~$0.003 | price + metadata + security + pools in one call |
 | `token_info` | ~$0.005 | metadata + market data (supply, mcap, FDV, liquidity) |
 | `token_holders` | ~$0.005 | holder count + top-5/10/20 concentration |
+| `token_top_traders` | ~$0.005 | top traders by volume (Birdeye) — wallet, whale tags, buy/sell, USD volume |
 | `trending` | ~$0.002 | trending tokens across sources |
 | `new_tokens` | ~$0.002 | freshly launched tokens (discovery feed) |
 | `wallet_pnl` | ~$0.01 | realized/unrealized P&L for any wallet |
