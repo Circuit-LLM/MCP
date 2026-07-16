@@ -112,6 +112,9 @@ export function buildServer(opts = {}) {
     }
   }
 
+  // internalKey is a CODE-ONLY option (opts, never env) for a Circuit-operated hosted deployment that fetches
+  // the data API with the internal-key bypass and meters the agent itself. It is deliberately not env-readable
+  // so a distributed `npx` user can't flip a payment bypass — see docs/HOSTING.md.
   const data = new Data({
     wallet: hasWallet ? wallet : undefined,
     maxSpendRaw: toRaw(capCirc), // cap per single tool call (CIRC path)
@@ -120,11 +123,12 @@ export function buildServer(opts = {}) {
     payToken, // undefined → pay CIRC; a mint → pay that registered token where accepted, else CIRC
     maxPayTokenRaw, // fail-closed per-call ceiling for the foreign token (base units)
     maxTotalPayTokenRaw, // optional cumulative foreign-token drain guard
+    internalKey: opts.internalKey, // hosted-only: fetch free via the internal-key bypass (metering happens at the boundary)
     onPay: (q) => log(`[circuit-mcp] paid ${q?.amountDisplay ?? '?'} for a tool call`),
     baseUrl: env.CIRCUIT_DATA_URL || undefined,
   });
 
-  const server = new McpServer({ name: 'circuit-data', version: '0.2.1' });
+  const server = new McpServer({ name: 'circuit-data', version: '0.2.2' });
 
   const asText = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o, null, 2) }] });
   const asError = (m) => ({ content: [{ type: 'text', text: `Error: ${m}` }], isError: true });
