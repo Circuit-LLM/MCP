@@ -1,6 +1,6 @@
 {
   "name": "@circuit-llm/mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Circuit MCP — real-time Solana data + agent-swarm intelligence as x402-paid tools for any AI agent. No API keys.",
   "license": "MIT",
   "type": "module",
@@ -13,11 +13,13 @@
   },
   "scripts": {
     "start": "node bin/circuit-mcp.js",
-    "smoke": "node test/smoke.mjs"
+    "smoke": "node test/smoke.mjs",
+    "test:paytoken": "node test/paytoken.mjs",
+    "test": "node test/paytoken.mjs && node test/smoke.mjs"
   },
   "dependencies": {
-    "@circuit-llm/data": "^0.2.5",
-    "@circuit-llm/wallet": "^0.2.5",
+    "@circuit-llm/data": "^0.2.6",
+    "@circuit-llm/wallet": "^0.2.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.25.0 || ^4.0.0"
   },

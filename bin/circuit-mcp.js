@@ -4,9 +4,10 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { buildServer } from '../src/server.js';
 
-const { server, hasWallet, capCirc, totalCirc } = buildServer();
+const { server, hasWallet, capCirc, totalCirc, payToken } = buildServer();
 const transport = new StdioServerTransport();
 await server.connect(transport);
+const settle = payToken ? ` — settling in token ${payToken.slice(0, 4)}…${payToken.slice(-4)} where accepted, else CIRC` : '';
 process.stderr.write(
-  `circuit-mcp ready — paid tools ${hasWallet ? `ENABLED (cap ${capCirc} CIRC/call, ${totalCirc} CIRC/session)` : 'DISABLED (no CIRCUIT_WALLET; free tools only)'}\n`,
+  `circuit-mcp ready — paid tools ${hasWallet ? `ENABLED (cap ${capCirc} CIRC/call, ${totalCirc} CIRC/session)${settle}` : 'DISABLED (no CIRCUIT_WALLET; free tools only)'}\n`,
 );
