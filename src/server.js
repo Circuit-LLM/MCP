@@ -8,9 +8,14 @@
 // call auto-pays CIRC to the Circuit treasury, capped per call. Free tools need no wallet. This is the
 // "bring-your-own-wallet" MCP — drop it into Claude Desktop / an agent runtime, fund a CIRC wallet, done.
 //
-// Surface: 29 tools (14 free), 3 guided prompts, and 5 free ambient resources. The differentiator is the
-// swarm_* family — live signal/consensus/leaderboard/holdings/blacklist from Circuit's running agent fleet,
-// data no generic price API has. Every tool is READ-ONLY (a fetch); the only side effect is the micropayment.
+// Surface: 29 data tools (14 free) + pay_settle, 3 guided prompts, and 5 free ambient resources. The
+// differentiator is the swarm_* family — live signal/consensus/leaderboard/holdings/blacklist from Circuit's
+// running agent fleet, data no generic price API has. Every tool is READ-ONLY (a fetch); the only side
+// effect is the micropayment.
+//
+// Pass-through (no-wallet / hosted): without CIRCUIT_WALLET, a paid tool returns its x402 quote instead of
+// erroring, so the CALLER pays with their own wallet and completes the call via pay_settle (the tx signature
+// is verified on-chain). This server never holds funds. With a wallet, paid tools auto-pay and pay_settle is unused.
 //
 // Env:
 //   CIRCUIT_WALLET               base58 secret key that funds micropayments (omit → free tools only)
@@ -128,7 +133,7 @@ export function buildServer(opts = {}) {
     baseUrl: env.CIRCUIT_DATA_URL || undefined,
   });
 
-  const server = new McpServer({ name: 'circuit-data', version: '0.2.2' });
+  const server = new McpServer({ name: 'circuit-data', version: '0.3.0' });
 
   const asText = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o, null, 2) }] });
   const asError = (m) => ({ content: [{ type: 'text', text: `Error: ${m}` }], isError: true });
@@ -172,6 +177,54 @@ export function buildServer(opts = {}) {
         }
       },
     );
+
+  // ── x402 pass-through (no-wallet / hosted deployments) ──────────────────────
+  // With a wallet, paid tools auto-pay (above). WITHOUT one, instead of erroring we return the endpoint's
+  // 402 quote so the CALLER can pay with their OWN wallet and finish via `pay_settle` — the caller is the
+  // payer, the payee (treasury/collector, distributor→CIRC) is unchanged, and this server never holds funds.
+  const baseUrl = (env.CIRCUIT_DATA_URL || 'https://api.circuitllm.xyz').replace(/\/$/, '');
+  const routeUrl = (path, query) => {
+    const u = new URL(baseUrl + path);
+    for (const [k, v] of Object.entries(query || {})) if (v != null) u.searchParams.set(k, String(v));
+    return u.toString();
+  };
+  const x402Quote = async (path, query) => {
+    const r = await fetch(routeUrl(path, query), { signal: AbortSignal.timeout(20_000) });
+    if (r.ok) return r.json(); // endpoint was free / returned data directly
+    if (r.status !== 402) throw new Error(`data API ${r.status}`);
+    const body = await r.json().catch(() => ({}));
+    const alts = (body.acceptedTokens || [])
+      .filter((t) => t.amountRaw != null)
+      .map((t) => ({ symbol: t.symbol, mint: t.mint, amountRaw: String(t.amountRaw), recipient: t.recipient, decimals: t.decimals, tokenProgram: t.tokenProgram }));
+    return {
+      status: 'payment_required',
+      pay_in_CIRC: body.payment
+        ? { recipient: body.payment.recipient, amountRaw: String(body.payment.amountRaw), amountDisplay: body.payment.amountDisplay, token: body.payment.token, usdEquivalent: body.payment.usdEquivalent }
+        : null,
+      or_pay_in_registered_token: alts,
+      expires_in_seconds: body.expiresInSeconds ?? 300,
+      next: 'Pay ONE of the above on Solana with your wallet, then call pay_settle with { tool, args, signature } (the same tool + args). Or set CIRCUIT_WALLET so this server auto-pays.',
+    };
+  };
+  const x402Settle = async (path, query, signature) => {
+    if (!signature || typeof signature !== 'string') return { error: 'missing payment signature' };
+    const r = await fetch(routeUrl(path, query), { headers: { 'X-Payment-Signature': signature }, signal: AbortSignal.timeout(35_000) });
+    const b = await r.json().catch(() => null);
+    if (r.ok) return { data: b };
+    if (r.status === 402) return { error: 'payment not verified', reason: b?.reason || b?.message || 'unknown' };
+    return { error: `data API ${r.status}`, body: b };
+  };
+
+  // A paid tool declares its data-API route once; auto-pay (wallet) and quote (no wallet) both use it, and it
+  // registers the route so `pay_settle` can replay any paid tool with the caller's signature.
+  const paidRoute = {};
+  const paidTool = (name, config, route) => {
+    paidRoute[name] = route;
+    tool(name, config, (args) => {
+      const { path, query } = route(args ?? {});
+      return hasWallet ? data.get(path, query) : x402Quote(path, query);
+    });
+  };
 
   // ══ FREE — price & market data (no wallet needed) ═══════════════════════════
   tool(
@@ -249,87 +302,116 @@ export function buildServer(opts = {}) {
     () => data.get('/api/x402/registry'),
   );
 
-  // ══ PAID — swarm intelligence ⭐ (auto-pay CIRC via x402) ════════════════════
-  tool(
+  // ══ PAID — swarm intelligence ⭐ (auto-pay CIRC via x402; no wallet → returns a quote for pay_settle) ═════
+  paidTool(
     'swarm_feed',
     { title: 'Swarm signal feed', description: '~$0.002 in CIRC. Live buy/sell/rug signals published by the Circuit trading-agent swarm — signal data unique to Circuit.', inputSchema: { limit: z.number().int().max(100).optional(), type: z.enum(['buy_signal', 'sell_signal', 'rug_alert']).optional(), minReputation: z.number().optional().describe('only signals from agents above this reputation') } },
-    ({ limit, type, minReputation }) => data.get('/api/swarm/feed', { limit, type, minReputation }),
+    ({ limit, type, minReputation }) => ({ path: '/api/swarm/feed', query: { limit, type, minReputation } }),
   );
-  tool(
+  paidTool(
     'swarm_consensus',
     { title: 'Swarm consensus on a token', description: "~$0.002 in CIRC. The swarm's reputation-weighted view on ONE token: bullish / bearish / rug_alert with confidence.", inputSchema: { mint: z.string().describe('SPL token mint address') } },
-    ({ mint }) => data.get(`/api/swarm/consensus/${encodeURIComponent(mint)}`),
+    ({ mint }) => ({ path: `/api/swarm/consensus/${encodeURIComponent(mint)}` }),
   );
-  tool(
+  paidTool(
     'swarm_insights',
     { title: 'Swarm insights', description: '~$0.002 in CIRC. Aggregated patterns the swarm is seeing — what is working, what is being avoided, and emerging setups across the fleet.', inputSchema: { limit: z.number().int().max(100).optional().describe('max insights (default 20)') } },
-    ({ limit }) => data.get('/api/swarm/insights', { limit }),
+    ({ limit }) => ({ path: '/api/swarm/insights', query: { limit } }),
   );
 
   // ══ PAID — token deep-dive ══════════════════════════════════════════════════
-  tool(
+  paidTool(
     'token_security',
     { title: 'Token security audit', description: '~$0.003 in CIRC. Rug-risk audit: authority analysis, LP lock %, creator balance, and full risk flags by category.', inputSchema: { mint: z.string() } },
-    ({ mint }) => data.tokenSecurity(mint),
+    ({ mint }) => ({ path: '/api/token-security', query: { mint } }),
   );
-  tool(
+  paidTool(
     'token_overview',
     { title: 'One-shot token overview', description: 'Price + metadata + security audit + active pools in a single call (replaces four). Priced per /api/quote (~$0.003 in CIRC; often free).', inputSchema: { mint: z.string() } },
-    ({ mint }) => data.get('/api/token-overview', { mint }),
+    ({ mint }) => ({ path: '/api/token-overview', query: { mint } }),
   );
-  tool(
+  paidTool(
     'token_info',
     { title: 'Token metadata', description: '~$0.005 in CIRC. Token metadata + market data: name, symbol, supply, market cap, FDV, liquidity, and volume.', inputSchema: { mint: z.string() } },
-    ({ mint }) => data.tokenInfo(mint),
+    ({ mint }) => ({ path: '/api/token-info', query: { mint } }),
   );
-  tool(
+  paidTool(
     'token_holders',
     { title: 'Holder concentration', description: '~$0.005 in CIRC. Holder count + top-5/10/20 supply concentration (a key rug/whale signal).', inputSchema: { mint: z.string() } },
-    ({ mint }) => data.tokenHolders(mint),
+    ({ mint }) => ({ path: '/api/token-holders', query: { mint } }),
   );
-  tool(
+  paidTool(
     'token_top_traders',
     { title: 'Top traders', description: '~$0.005 in CIRC. Top traders of a token by volume (Birdeye): wallet, whale/smart-money tags, buy/sell trade counts, and USD volume — a smart-money signal.', inputSchema: { mint: z.string(), limit: z.number().int().max(20).optional().describe('max traders (default 10)'), window: z.enum(['30m', '1h', '2h', '4h', '6h', '8h', '12h', '24h']).optional().describe('time window (default 24h)') } },
-    ({ mint, limit, window }) => data.get('/api/token-top-traders', { mint, limit, window }),
+    ({ mint, limit, window }) => ({ path: '/api/token-top-traders', query: { mint, limit, window } }),
   );
-  tool(
+  paidTool(
     'trending',
     { title: 'Trending tokens', description: '~$0.002 in CIRC. Aggregated trending Solana tokens across RugCheck organic, DexScreener boosts, and volume signals.', inputSchema: { limit: z.number().int().max(50).optional() } },
-    ({ limit }) => data.get('/api/token-trending', { limit }),
+    ({ limit }) => ({ path: '/api/token-trending', query: { limit } }),
   );
-  tool(
+  paidTool(
     'new_tokens',
     { title: 'New token launches', description: '~$0.002 in CIRC. Freshly launched Solana tokens — a discovery/early-entry feed.', inputSchema: {} },
-    () => data.newTokens(),
+    () => ({ path: '/api/new-tokens' }),
   );
 
   // ══ PAID — wallet intelligence (smart-money tracking) ═══════════════════════
-  tool(
+  paidTool(
     'wallet_pnl',
     { title: 'Wallet P&L', description: '~$0.01 in CIRC. Realized/unrealized P&L for any Solana wallet — track smart money and copy-trade candidates.', inputSchema: { wallet: z.string().describe('Solana wallet address') } },
-    ({ wallet: w }) => data.walletPnl(w),
+    ({ wallet: w }) => ({ path: '/api/wallet-pnl', query: { wallet: w } }),
   );
-  tool(
+  paidTool(
     'wallet_analytics',
     { title: 'Wallet analytics', description: '~$0.01 in CIRC. Behavioral profile of a wallet: win rate, holding times, trade sizes, token history — is this wallet worth following?', inputSchema: { wallet: z.string().describe('Solana wallet address') } },
-    ({ wallet: w }) => data.walletAnalytics(w),
+    ({ wallet: w }) => ({ path: '/api/wallet-analytics', query: { wallet: w } }),
   );
 
   // ══ PAID — market macro context ═════════════════════════════════════════════
-  tool(
+  paidTool(
     'market_regime',
     { title: 'Market regime', description: '~$0.002 in CIRC. Risk-on / risk-off read on the Solana market (breadth, momentum, volatility) — the macro backdrop for any trade.', inputSchema: {} },
-    () => data.marketRegime(),
+    () => ({ path: '/api/market-regime' }),
   );
-  tool(
+  paidTool(
     'market_sentiment',
     { title: 'Market sentiment', description: '~$0.002 in CIRC. Fear/greed and sentiment gauge for the broader crypto market.', inputSchema: {} },
-    () => data.marketSentiment(),
+    () => ({ path: '/api/market-sentiment' }),
   );
-  tool(
+  paidTool(
     'market_overview',
     { title: 'Market overview', description: '~$0.002 in CIRC. Broad market snapshot: total cap, volume, BTC/SOL dominance, and top movers.', inputSchema: {} },
-    () => data.marketOverview(),
+    () => ({ path: '/api/market-overview' }),
+  );
+
+  // ══ pay_settle — finish a paid call after paying its quote (pass-through) ════
+  server.registerTool(
+    'pay_settle',
+    {
+      title: 'Settle a paid tool with an on-chain payment',
+      description:
+        'Complete a paid Circuit tool when this server has no wallet. First call the paid tool (e.g. trending) to ' +
+        'get a payment quote, pay it on Solana with your own wallet (CIRC to the recipient, or any registered token ' +
+        'to its collector), then call pay_settle with the SAME { tool, args } and your transaction signature. The ' +
+        'payment is verified on-chain (single-use, ≤5 min). With a funded CIRCUIT_WALLET you never need this — paid tools auto-pay.',
+      inputSchema: {
+        tool: z.string().describe('the paid tool you are paying for, e.g. "trending", "wallet_pnl"'),
+        args: z.object({}).passthrough().optional().describe('the SAME arguments you passed to the paid tool'),
+        signature: z.string().describe('your Solana transaction signature proving the payment'),
+      },
+      // Read-only like every Circuit tool: it delivers already-paid data given a signature the CALLER
+      // produced out-of-band; pay_settle itself neither signs nor spends.
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ tool: toolName, args, signature }) => {
+      const route = paidRoute[toolName];
+      if (!route) return asError(`unknown paid tool "${toolName}"`);
+      const { path, query } = route(args ?? {});
+      const r = await x402Settle(path, query, signature);
+      if (r.error) return { content: [{ type: 'text', text: JSON.stringify({ status: 'payment_failed', ...r }, null, 2) }], isError: true };
+      return asText(r.data);
+    },
   );
 
   // ── Prompts — guided multi-tool workflows ───────────────────────────────────

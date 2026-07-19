@@ -22,7 +22,7 @@ A thin [Model Context Protocol](https://modelcontextprotocol.io) server over [`@
 
 The differentiator is the **`swarm_*`** tools: live signals, consensus, leaderboard, holdings, and a crowd-sourced rug blacklist from Circuit's running trading-agent fleet — data no generic price API has.
 
-**29 tools (14 free), 3 guided prompts, and 5 free ambient resources.** Every tool is read-only.
+**29 data tools (14 free) + `pay_settle`, 3 guided prompts, and 5 free ambient resources.** Every tool is read-only.
 
 ## Quick Start
 
@@ -34,7 +34,7 @@ Add it to any MCP client (Claude Desktop, Claude Code, an agent runtime):
     "env": { "CIRCUIT_WALLET": "<base58 secret funded with CIRC>" } } }   // omit → free tools only
 ```
 
-Then ask your agent *"what's the swarm's consensus on this mint?"* or *"audit this token for rug risk."* The paid tools settle on Solana in ~400ms behind the scenes. Without `CIRCUIT_WALLET`, the free tools still work.
+Then ask your agent *"what's the swarm's consensus on this mint?"* or *"audit this token for rug risk."* The paid tools settle on Solana in ~400ms behind the scenes. Without `CIRCUIT_WALLET`, the free tools still work — and paid tools return an x402 quote you can pay from your own wallet and complete with `pay_settle` (see [pass-through](#how-it-works)).
 
 ## Tools
 
@@ -82,6 +82,8 @@ Then ask your agent *"what's the swarm's consensus on this mint?"* or *"audit th
 | `market_overview` | ~$0.002 | broad market snapshot + top movers |
 
 Prices are live from `circuit_quote` (`/api/quote`); a few paid endpoints are intermittently ungated (free).
+
+**Settlement** — `pay_settle`: when the server has no wallet, a paid tool returns an x402 quote instead of paying. Pay it on Solana yourself (CIRC to the recipient, or any registered token to its collector), then call `pay_settle` with the same `{ tool, args }` and your transaction signature to get the data. With a funded `CIRCUIT_WALLET`, paid tools auto-pay and you never need this.
 
 ## Prompts
 
@@ -132,7 +134,9 @@ also falls back to CIRC automatically. Requires a funded `CIRCUIT_WALLET` that h
 
 ## How it works
 
-Each paid tool call hits the [Circuit Data API](https://api.circuitllm.xyz): a free endpoint returns data; a paid one answers `402 Payment Required` with a CIRC quote. [`@circuit-llm/data`](https://github.com/Circuit-LLM/circuit-sdk/tree/main/packages/data) pays the quote from your wallet on Solana and retries — the spend caps and `CIRCUIT_TREASURY` allow-list bound where and how much. For a **hosted** deployment (Circuit fronts payment so agents need no wallet), see [docs/HOSTING.md](docs/HOSTING.md).
+Each paid tool call hits the [Circuit Data API](https://api.circuitllm.xyz): a free endpoint returns data; a paid one answers `402 Payment Required` with a CIRC quote. [`@circuit-llm/data`](https://github.com/Circuit-LLM/circuit-sdk/tree/main/packages/data) pays the quote from your wallet on Solana and retries — the spend caps and `CIRCUIT_TREASURY` allow-list bound where and how much.
+
+**Pass-through (no wallet).** Without `CIRCUIT_WALLET`, the server doesn't pay — it returns that 402 quote to the caller. You pay it yourself and finish with `pay_settle`; the data API verifies the signature on-chain (single-use, ≤5 min), so the server never holds funds. This is how a wallet-free hosted endpoint (like [mcp.circuitllm.xyz](https://mcp.circuitllm.xyz)) lets each caller pay per call in their own token. For a Circuit-fronted hosted deployment, see [docs/HOSTING.md](docs/HOSTING.md).
 
 ## Develop
 

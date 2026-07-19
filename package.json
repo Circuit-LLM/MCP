@@ -1,6 +1,6 @@
 {
   "name": "@circuit-llm/mcp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Circuit MCP — real-time Solana data + agent-swarm intelligence as x402-paid tools for any AI agent. No API keys.",
   "license": "MIT",
   "type": "module",

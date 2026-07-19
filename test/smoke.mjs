@@ -36,9 +36,12 @@ try {
   const lb = await client.callTool({ name: 'swarm_leaderboard', arguments: { limit: 3 } });
   check(!lb.isError && /leaderboard|reputation/i.test(lb.content?.[0]?.text ?? ''), 'swarm_leaderboard (free) returned data');
 
-  // A paid tool with no wallet must fail gracefully with a clear hint (not crash).
+  // A paid tool with no wallet now returns an x402 QUOTE (pass-through): the caller pays with their own
+  // wallet and completes the call via pay_settle. (With a wallet it would auto-pay instead.)
+  check(names.includes('pay_settle'), 'pay_settle tool registered');
   const s = await client.callTool({ name: 'token_security', arguments: { mint: CIRC } });
-  check(s.isError && /CIRCUIT_WALLET|CIRC/i.test(s.content?.[0]?.text ?? ''), 'paid tool w/o wallet → friendly error', s.content?.[0]?.text?.slice(0, 70));
+  const stext = s.content?.[0]?.text ?? '';
+  check(!s.isError && /payment_required/i.test(stext) && /pay_settle/i.test(stext), 'paid tool w/o wallet → x402 quote for pay_settle', stext.slice(0, 70).replace(/\n/g, ' '));
 
   // Prompts and resources should be registered.
   const { prompts } = await client.listPrompts();
