@@ -8,10 +8,10 @@
 // call auto-pays CIRC to the Circuit treasury, capped per call. Free tools need no wallet. This is the
 // "bring-your-own-wallet" MCP — drop it into Claude Desktop / an agent runtime, fund a CIRC wallet, done.
 //
-// Surface: 29 data tools (14 free) + pay_settle, 3 guided prompts, and 5 free ambient resources. The
-// differentiator is the swarm_* family — live signal/consensus/leaderboard/holdings/blacklist from Circuit's
-// running agent fleet, data no generic price API has. Every tool is READ-ONLY (a fetch); the only side
-// effect is the micropayment.
+// Surface: 29 data tools (14 free) + dllm_chat (decentralized LLM inference, paid) + pay_settle, 3 guided
+// prompts, and 5 free ambient resources. The differentiator is the swarm_* family — live signal/consensus/
+// leaderboard/holdings/blacklist from Circuit's running agent fleet, data no generic price API has. Every
+// tool is READ-ONLY (a fetch or an inference generation); the only side effect is the micropayment.
 //
 // Pass-through (no-wallet / hosted): without CIRCUIT_WALLET, a paid tool returns its x402 quote instead of
 // erroring, so the CALLER pays with their own wallet and completes the call via pay_settle (the tx signature
@@ -37,6 +37,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { Data } from '@circuit-llm/data';
+import { X402Client } from '@circuit-llm/x402';
 import { makeWallet } from '@circuit-llm/wallet';
 
 const CIRC_DECIMALS = 6;
@@ -120,7 +121,9 @@ export function buildServer(opts = {}) {
   // internalKey is a CODE-ONLY option (opts, never env) for a Circuit-operated hosted deployment that fetches
   // the data API with the internal-key bypass and meters the agent itself. It is deliberately not env-readable
   // so a distributed `npx` user can't flip a payment bypass — see docs/HOSTING.md.
-  const data = new Data({
+  // One x402 payer shared by the data tools AND dllm_chat, so the per-call cap, cumulative drain guard,
+  // recipient pinning, and registered-token settings apply uniformly across everything this server pays for.
+  const x402 = new X402Client({
     wallet: hasWallet ? wallet : undefined,
     maxSpendRaw: toRaw(capCirc), // cap per single tool call (CIRC path)
     maxTotalSpendRaw: toRaw(totalCirc), // cap total spend for this process (stops a runaway/looping agent)
@@ -128,12 +131,15 @@ export function buildServer(opts = {}) {
     payToken, // undefined → pay CIRC; a mint → pay that registered token where accepted, else CIRC
     maxPayTokenRaw, // fail-closed per-call ceiling for the foreign token (base units)
     maxTotalPayTokenRaw, // optional cumulative foreign-token drain guard
-    internalKey: opts.internalKey, // hosted-only: fetch free via the internal-key bypass (metering happens at the boundary)
     onPay: (q) => log(`[circuit-mcp] paid ${q?.amountDisplay ?? '?'} for a tool call`),
+  });
+  const data = new Data({
+    x402, // reuse the shared payer (caps/pinning/payToken already configured on it)
+    internalKey: opts.internalKey, // hosted-only: fetch free via the internal-key bypass (metering happens at the boundary)
     baseUrl: env.CIRCUIT_DATA_URL || undefined,
   });
 
-  const server = new McpServer({ name: 'circuit-data', version: '0.3.0' });
+  const server = new McpServer({ name: 'circuit-data', version: '0.4.0' });
 
   const asText = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o, null, 2) }] });
   const asError = (m) => ({ content: [{ type: 'text', text: `Error: ${m}` }], isError: true });
@@ -188,11 +194,9 @@ export function buildServer(opts = {}) {
     for (const [k, v] of Object.entries(query || {})) if (v != null) u.searchParams.set(k, String(v));
     return u.toString();
   };
-  const x402Quote = async (path, query) => {
-    const r = await fetch(routeUrl(path, query), { signal: AbortSignal.timeout(20_000) });
-    if (r.ok) return r.json(); // endpoint was free / returned data directly
-    if (r.status !== 402) throw new Error(`data API ${r.status}`);
-    const body = await r.json().catch(() => ({}));
+  // Format a 402 body into the quote we hand a no-wallet caller (shared by the data GET path and the
+  // inference POST path). Lists CIRC + every registered token the endpoint accepts, plus what to do next.
+  const quoteFrom402 = (body) => {
     const alts = (body.acceptedTokens || [])
       .filter((t) => t.amountRaw != null)
       .map((t) => ({ symbol: t.symbol, mint: t.mint, amountRaw: String(t.amountRaw), recipient: t.recipient, decimals: t.decimals, tokenProgram: t.tokenProgram }));
@@ -205,6 +209,12 @@ export function buildServer(opts = {}) {
       expires_in_seconds: body.expiresInSeconds ?? 300,
       next: 'Pay ONE of the above on Solana with your wallet, then call pay_settle with { tool, args, signature } (the same tool + args). Or set CIRCUIT_WALLET so this server auto-pays.',
     };
+  };
+  const x402Quote = async (path, query) => {
+    const r = await fetch(routeUrl(path, query), { signal: AbortSignal.timeout(20_000) });
+    if (r.ok) return r.json(); // endpoint was free / returned data directly
+    if (r.status !== 402) throw new Error(`data API ${r.status}`);
+    return quoteFrom402(await r.json().catch(() => ({})));
   };
   const x402Settle = async (path, query, signature) => {
     if (!signature || typeof signature !== 'string') return { error: 'missing payment signature' };
@@ -223,6 +233,83 @@ export function buildServer(opts = {}) {
     tool(name, config, (args) => {
       const { path, query } = route(args ?? {});
       return hasWallet ? data.get(path, query) : x402Quote(path, query);
+    });
+  };
+
+  // ── x402 inference (POST /v1/chat/completions on the DLLM gateway) ───────────
+  // Same x402 rail as the data tools (same CIRC treasury + on-chain verify), just POST-with-a-body on a
+  // different host. With a wallet the shared X402Client auto-pays; without one it returns a quote the
+  // caller settles via pay_settle. Inference can be slower than a data read, so these use a longer budget.
+  const inferenceBase = (env.CIRCUIT_INFERENCE_URL || 'https://inference.circuitllm.xyz').replace(/\/$/, '');
+  const inferenceEndpoint = `${inferenceBase}/v1/chat/completions`;
+  const INFERENCE_TIMEOUT_MS = 115_000;
+  // Build the OpenAI-style request body from tool args. Throws (→ friendly tool error) if given nothing.
+  const chatBody = (args = {}) => {
+    const messages =
+      Array.isArray(args.messages) && args.messages.length
+        ? args.messages
+        : [
+            ...(args.system ? [{ role: 'system', content: String(args.system) }] : []),
+            { role: 'user', content: String(args.prompt ?? '') },
+          ];
+    const hasContent = messages.some((m) => String(m?.content ?? '').trim());
+    if (!hasContent) throw new Error('provide `prompt` or `messages`');
+    const body = { messages, stream: false }; // MCP tool results aren't streamed — ask for the full completion
+    if (args.max_tokens != null) body.max_tokens = args.max_tokens;
+    return body;
+  };
+  // Shape a completion for the tool result — surfaces WHICH backend served it: 'mesh' is the decentralized
+  // DLLM (Qwen2.5-72B); 'openrouter-fallback' is the fallback model served while the mesh is offline.
+  const shapeCompletion = (b, resp) => ({
+    reply: b?.choices?.[0]?.message?.content ?? '',
+    model: b?.model ?? null,
+    backend: resp.headers.get('x-circuit-backend') || 'mesh',
+    finish_reason: b?.choices?.[0]?.finish_reason ?? null,
+    usage: b?.usage ?? null,
+  });
+  const inferencePay = async (body) => {
+    const resp = await x402.fetch(inferenceEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(INFERENCE_TIMEOUT_MS),
+    });
+    const b = await resp.json().catch(() => null);
+    if (!resp.ok) throw new Error(`inference gateway ${resp.status}: ${b?.error || b?.message || 'error'}`);
+    return shapeCompletion(b, resp);
+  };
+  const inferenceQuote = async (body) => {
+    const r = await fetch(inferenceEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (r.ok) return r.json();
+    if (r.status !== 402) throw new Error(`inference gateway ${r.status}`);
+    return quoteFrom402(await r.json().catch(() => ({})));
+  };
+  const inferenceSettle = async (body, signature) => {
+    if (!signature || typeof signature !== 'string') return { error: 'missing payment signature' };
+    const r = await fetch(inferenceEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Payment-Signature': signature },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(INFERENCE_TIMEOUT_MS),
+    });
+    const b = await r.json().catch(() => null);
+    if (r.ok) return { data: shapeCompletion(b, r) };
+    if (r.status === 402) return { error: 'payment not verified', reason: b?.reason || b?.message || 'unknown' };
+    return { error: `inference gateway ${r.status}`, body: b };
+  };
+  // A paid POST (inference) tool: args → request body. Same wallet/no-wallet split as paidTool, and its
+  // route is registered so pay_settle can rebuild the identical body from the caller's { tool, args }.
+  const paidPostRoute = {};
+  const paidPostTool = (name, config, route) => {
+    paidPostRoute[name] = route;
+    tool(name, config, (args) => {
+      const body = route(args ?? {});
+      return hasWallet ? inferencePay(body) : inferenceQuote(body);
     });
   };
 
@@ -385,18 +472,43 @@ export function buildServer(opts = {}) {
     () => ({ path: '/api/market-overview' }),
   );
 
+  // ══ PAID — decentralized LLM inference (Circuit DLLM, x402) ═════════════════
+  paidPostTool(
+    'dllm_chat',
+    {
+      title: 'Circuit DLLM chat (decentralized inference)',
+      description:
+        '~$0.03 in CIRC. Chat completion from Circuit\'s decentralized LLM (Qwen2.5-72B) over x402 — the same ' +
+        'per-call payment rail as the data tools, not model credits. With CIRCUIT_WALLET it auto-pays; without one ' +
+        'it returns a quote to settle via pay_settle. Pass `prompt` for a single turn (optionally with `system`), or ' +
+        'full `messages`. The result\'s `backend` says who served it: "mesh" = the decentralized DLLM, ' +
+        '"openrouter-fallback" = a fallback model served while the mesh is offline.',
+      inputSchema: {
+        prompt: z.string().optional().describe('Single-turn user message (shortcut for messages).'),
+        system: z.string().optional().describe('Optional system prompt, used together with `prompt`.'),
+        messages: z
+          .array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() }))
+          .optional()
+          .describe('Full OpenAI-style messages; overrides `prompt`/`system` when provided.'),
+        max_tokens: z.number().int().positive().max(4096).optional().describe('Max tokens to generate.'),
+      },
+    },
+    (args) => chatBody(args),
+  );
+
   // ══ pay_settle — finish a paid call after paying its quote (pass-through) ════
   server.registerTool(
     'pay_settle',
     {
       title: 'Settle a paid tool with an on-chain payment',
       description:
-        'Complete a paid Circuit tool when this server has no wallet. First call the paid tool (e.g. trending) to ' +
-        'get a payment quote, pay it on Solana with your own wallet (CIRC to the recipient, or any registered token ' +
-        'to its collector), then call pay_settle with the SAME { tool, args } and your transaction signature. The ' +
-        'payment is verified on-chain (single-use, ≤5 min). With a funded CIRCUIT_WALLET you never need this — paid tools auto-pay.',
+        'Complete a paid Circuit tool when this server has no wallet. First call the paid tool (e.g. trending, ' +
+        'dllm_chat) to get a payment quote, pay it on Solana with your own wallet (CIRC to the recipient, or any ' +
+        'registered token to its collector), then call pay_settle with the SAME { tool, args } and your transaction ' +
+        'signature. The payment is verified on-chain (single-use, ≤5 min). With a funded CIRCUIT_WALLET you never ' +
+        'need this — paid tools auto-pay.',
       inputSchema: {
-        tool: z.string().describe('the paid tool you are paying for, e.g. "trending", "wallet_pnl"'),
+        tool: z.string().describe('the paid tool you are paying for, e.g. "trending", "wallet_pnl", "dllm_chat"'),
         args: z.object({}).passthrough().optional().describe('the SAME arguments you passed to the paid tool'),
         signature: z.string().describe('your Solana transaction signature proving the payment'),
       },
@@ -405,6 +517,14 @@ export function buildServer(opts = {}) {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ tool: toolName, args, signature }) => {
+      // POST (inference) tools rebuild their request body from args; GET (data) tools rebuild path+query.
+      if (paidPostRoute[toolName]) {
+        let body;
+        try { body = paidPostRoute[toolName](args ?? {}); } catch (e) { return asError(e?.message ?? String(e)); }
+        const r = await inferenceSettle(body, signature);
+        if (r.error) return { content: [{ type: 'text', text: JSON.stringify({ status: 'payment_failed', ...r }, null, 2) }], isError: true };
+        return asText(r.data);
+      }
       const route = paidRoute[toolName];
       if (!route) return asError(`unknown paid tool "${toolName}"`);
       const { path, query } = route(args ?? {});

@@ -19,9 +19,10 @@ try {
 
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  check(tools.length >= 29, `listed ${tools.length} tools`, names.join(', '));
+  check(tools.length >= 30, `listed ${tools.length} tools`, names.join(', '));
   check(names.includes('swarm_feed') && names.includes('token_security'), 'core tools present');
   check(['swarm_leaderboard', 'swarm_holdings', 'swarm_blacklist_check', 'swarm_insights', 'wallet_pnl', 'slippage_buy', 'new_tokens', 'market_regime', 'token_top_traders'].every((n) => names.includes(n)), 'new tools registered');
+  check(names.includes('dllm_chat'), 'dllm_chat (decentralized inference) registered');
   check(tools.every((t) => t.annotations?.readOnlyHint === true), 'all tools annotated read-only');
 
   const q = await client.callTool({ name: 'circuit_quote', arguments: {} });
@@ -42,6 +43,14 @@ try {
   const s = await client.callTool({ name: 'token_security', arguments: { mint: CIRC } });
   const stext = s.content?.[0]?.text ?? '';
   check(!s.isError && /payment_required/i.test(stext) && /pay_settle/i.test(stext), 'paid tool w/o wallet → x402 quote for pay_settle', stext.slice(0, 70).replace(/\n/g, ' '));
+
+  // dllm_chat is a paid POST tool on the inference gateway — same no-wallet behavior: it should return an
+  // x402 quote (in CIRC) for pay_settle, not an error. Empty input should be rejected up front.
+  const dc = await client.callTool({ name: 'dllm_chat', arguments: { prompt: 'ping' } });
+  const dtext = dc.content?.[0]?.text ?? '';
+  check(!dc.isError && /payment_required/i.test(dtext) && /pay_in_CIRC/i.test(dtext), 'dllm_chat (paid) w/o wallet → x402 quote', dtext.slice(0, 70).replace(/\n/g, ' '));
+  const de = await client.callTool({ name: 'dllm_chat', arguments: {} });
+  check(de.isError && /prompt.*messages|provide/i.test(de.content?.[0]?.text ?? ''), 'dllm_chat with no input → friendly error');
 
   // Prompts and resources should be registered.
   const { prompts } = await client.listPrompts();

@@ -22,7 +22,7 @@ A thin [Model Context Protocol](https://modelcontextprotocol.io) server over [`@
 
 The differentiator is the **`swarm_*`** tools: live signals, consensus, leaderboard, holdings, and a crowd-sourced rug blacklist from Circuit's running trading-agent fleet — data no generic price API has.
 
-**29 data tools (14 free) + `pay_settle`, 3 guided prompts, and 5 free ambient resources.** Every tool is read-only.
+**29 data tools (14 free) + `dllm_chat` (decentralized LLM inference) + `pay_settle`, 3 guided prompts, and 5 free ambient resources.** Every tool is read-only.
 
 ## Quick Start
 
@@ -83,6 +83,14 @@ Then ask your agent *"what's the swarm's consensus on this mint?"* or *"audit th
 
 Prices are live from `circuit_quote` (`/api/quote`); a few paid endpoints are intermittently ungated (free).
 
+**Paid — decentralized inference**
+
+| Tool | Cost | What |
+|------|------|------|
+| `dllm_chat` | ~$0.03 | chat completion from Circuit's decentralized LLM (Qwen2.5-72B) over x402 |
+
+`dllm_chat` pays per call in CIRC — the **same x402 rail** as the data tools, not model credits. Pass `prompt` (single turn, optional `system`) or full OpenAI-style `messages`. The result includes a `backend` field: `mesh` = the decentralized DLLM, `openrouter-fallback` = a hosted fallback model served while the mesh is offline (so a paid call never dead-ends). Point it elsewhere with `CIRCUIT_INFERENCE_URL` (default `https://inference.circuitllm.xyz`).
+
 **Settlement** — `pay_settle`: when the server has no wallet, a paid tool returns an x402 quote instead of paying. Pay it on Solana yourself (CIRC to the recipient, or any registered token to its collector), then call `pay_settle` with the same `{ tool, args }` and your transaction signature to get the data. With a funded `CIRCUIT_WALLET`, paid tools auto-pay and you never need this.
 
 ## Prompts
@@ -111,6 +119,7 @@ All configuration is via environment variables.
 | `CIRCUIT_MCP_TIMEOUT_MS` | `120000` | outer per-tool-call backstop (a genuinely stuck call returns a clean error) |
 | `CIRCUIT_TREASURY` | — | if set, only ever pay this address (recipient allow-list — recommended) |
 | `CIRCUIT_DATA_URL` | `https://api.circuitllm.xyz` | override the data API base |
+| `CIRCUIT_INFERENCE_URL` | `https://inference.circuitllm.xyz` | override the DLLM inference gateway base (`dllm_chat`) |
 | `CIRCUIT_RPC_URL` | public RPC | Solana RPC used to send payments — set your own; the public default rate-limits |
 | `CIRCUIT_PAYMENT_MINT` | — | pay in a **registered token** instead of CIRC (see [Paying in another token](#paying-in-another-token)) |
 | `CIRCUIT_MCP_MAX_PAYTOKEN` | — | **required** with `CIRCUIT_PAYMENT_MINT`: per-call ceiling in the token's own base units (fail-closed) |

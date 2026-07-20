@@ -1,7 +1,7 @@
 {
   "name": "@circuit-llm/mcp",
-  "version": "0.3.0",
-  "description": "Circuit MCP — real-time Solana data + agent-swarm intelligence as x402-paid tools for any AI agent. No API keys.",
+  "version": "0.4.0",
+  "description": "Circuit MCP — real-time Solana data, agent-swarm intelligence, and decentralized LLM inference as x402-paid tools for any AI agent. No API keys.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -20,6 +20,7 @@
   "dependencies": {
     "@circuit-llm/data": "^0.2.6",
     "@circuit-llm/wallet": "^0.2.6",
+    "@circuit-llm/x402": "^0.2.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.25.0 || ^4.0.0"
   },
