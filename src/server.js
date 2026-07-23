@@ -8,7 +8,7 @@
 // call auto-pays CIRC to the Circuit treasury, capped per call. Free tools need no wallet. This is the
 // "bring-your-own-wallet" MCP — drop it into Claude Desktop / an agent runtime, fund a CIRC wallet, done.
 //
-// Surface: 29 data tools (14 free) + dllm_chat (decentralized LLM inference, paid) + pay_settle, 3 guided
+// Surface: 43 data tools (14 free) + dllm_chat (decentralized LLM inference, paid) + pay_settle, 3 guided
 // prompts, and 5 free ambient resources. The differentiator is the swarm_* family — live signal/consensus/
 // leaderboard/holdings/blacklist from Circuit's running agent fleet, data no generic price API has. Every
 // tool is READ-ONLY (a fetch or an inference generation); the only side effect is the micropayment.
@@ -139,7 +139,7 @@ export function buildServer(opts = {}) {
     baseUrl: env.CIRCUIT_DATA_URL || undefined,
   });
 
-  const server = new McpServer({ name: 'circuit-data', version: '0.4.0' });
+  const server = new McpServer({ name: 'circuit-data', version: '0.5.0' });
 
   const asText = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o, null, 2) }] });
   const asError = (m) => ({ content: [{ type: 'text', text: `Error: ${m}` }], isError: true });
@@ -429,8 +429,62 @@ export function buildServer(opts = {}) {
   );
   paidTool(
     'token_top_traders',
-    { title: 'Top traders', description: '~$0.005 in CIRC. Top traders of a token by volume (Birdeye): wallet, whale/smart-money tags, buy/sell trade counts, and USD volume — a smart-money signal.', inputSchema: { mint: z.string(), limit: z.number().int().max(20).optional().describe('max traders (default 10)'), window: z.enum(['30m', '1h', '2h', '4h', '6h', '8h', '12h', '24h']).optional().describe('time window (default 24h)') } },
-    ({ mint, limit, window }) => ({ path: '/api/token-top-traders', query: { mint, limit, window } }),
+    { title: 'Top traders', description: "~$0.005 in CIRC. Top traders of a token by USD volume from Circuit's own on-chain swap feed (each swap attributed to its fee payer): wallet, buy/sell trade counts, and buy/sell USD volume — a smart-money signal.", inputSchema: { mint: z.string(), limit: z.number().int().max(20).optional().describe('max traders (default 10)') } },
+    ({ mint, limit }) => ({ path: '/api/token-top-traders', query: { mint, limit } }),
+  );
+
+  // ══ PAID — on-chain token analytics (circuit-node suite) ════════════════════
+  // Distinct per-signal reads computed by circuit-node from on-chain data, fronted on
+  // api.circuitllm.xyz. Each is a pay-per-call point read keyed by mint.
+  paidTool(
+    'token_smart_money',
+    { title: 'Smart money flow', description: '~$0.003 in CIRC. Whale accumulation/distribution from large (>$500) trades: net flow direction and whether smart money is net buying or selling right now.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/smart-money` }),
+  );
+  paidTool(
+    'token_momentum',
+    { title: 'Momentum signal', description: '~$0.003 in CIRC. Buy/sell pressure + price velocity from recent on-chain trades: score 0–100 and direction (BULLISH|NEUTRAL|BEARISH), with a 5m/15m/1h breakdown. Core swarm entry signal.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/momentum` }),
+  );
+  paidTool(
+    'token_velocity',
+    { title: 'Trading velocity', description: '~$0.003 in CIRC. Trades per minute, velocity trend (ACCELERATING|FLAT|DECELERATING), avg/median trade size, and category (HYPER|ACTIVE|NORMAL|SLOW|DORMANT).', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/velocity` }),
+  );
+  paidTool(
+    'token_lifecycle',
+    { title: 'Lifecycle stage', description: '~$0.003 in CIRC. Classify a token: LAUNCH | EARLY_GROWTH | PEAK | PLATEAU | DECLINING | DORMANT — avoid buying into distribution.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/lifecycle` }),
+  );
+  paidTool(
+    'token_concentration_risk',
+    { title: 'Concentration risk', description: '~$0.003 in CIRC. Deep holder concentration (Gini/HHI, top-1/5/10/20 supply %, whale count) with a risk grade A–F — coordinated-dump risk.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/concentration-risk` }),
+  );
+  paidTool(
+    'token_technical_signals',
+    { title: 'Technical analysis', description: '~$0.003 in CIRC. SMA5/20/50, RSI, trend (UPTREND|DOWNTREND|SIDEWAYS), support/resistance, and actionable signal flags.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/technical-signals` }),
+  );
+  paidTool(
+    'token_narrative',
+    { title: 'Narrative classification', description: '~$0.003 in CIRC. Bucket a token: MEME | DEFI | AI | GAMING | INFRA | UNKNOWN — for narrative-filtered watchlists.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/narrative` }),
+  );
+  paidTool(
+    'token_wash',
+    { title: 'Wash-trade detection', description: '~$0.003 in CIRC. Detect wash trading (round-trip pairs, uniform sizes, inflated volume): verdict CLEAN | SUSPICIOUS | HIGH_RISK.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/wash` }),
+  );
+  paidTool(
+    'token_entry',
+    { title: 'Entry signal', description: '~$0.003 in CIRC. Dip-reversal entry score mirroring the swarm gates: ENTRY | WATCH | NO_SIGNAL, score 0–100, and which gates passed/failed.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/entry` }),
+  );
+  paidTool(
+    'token_exit_liquidity',
+    { title: 'Exit liquidity', description: '~$0.003 in CIRC. How much can realistically be sold before heavy price impact — the practical exit-liquidity ceiling.', inputSchema: { mint: z.string() } },
+    ({ mint }) => ({ path: `/api/token/${encodeURIComponent(mint)}/exit-liquidity` }),
   );
   paidTool(
     'trending',
@@ -453,6 +507,26 @@ export function buildServer(opts = {}) {
     'wallet_analytics',
     { title: 'Wallet analytics', description: '~$0.01 in CIRC. Behavioral profile of a wallet: win rate, holding times, trade sizes, token history — is this wallet worth following?', inputSchema: { wallet: z.string().describe('Solana wallet address') } },
     ({ wallet: w }) => ({ path: '/api/wallet-analytics', query: { wallet: w } }),
+  );
+  paidTool(
+    'wallet_rank',
+    { title: 'Wallet rank', description: '~$0.005 in CIRC. Skill/leaderboard rank for a wallet — how it stacks up against other Solana traders.', inputSchema: { wallet: z.string().describe('Solana wallet address') } },
+    ({ wallet: w }) => ({ path: `/api/wallet/${encodeURIComponent(w)}/rank` }),
+  );
+  paidTool(
+    'wallet_behavior',
+    { title: 'Wallet behavior', description: '~$0.003 in CIRC. Trading-behaviour profile: style, hold times, and win patterns — is this wallet worth copying?', inputSchema: { wallet: z.string().describe('Solana wallet address') } },
+    ({ wallet: w }) => ({ path: `/api/wallet/${encodeURIComponent(w)}/behavior` }),
+  );
+  paidTool(
+    'wallet_networth',
+    { title: 'Wallet net worth', description: '~$0.003 in CIRC. Current net worth of a wallet: SOL + token holdings valued in USD.', inputSchema: { wallet: z.string().describe('Solana wallet address') } },
+    ({ wallet: w }) => ({ path: `/api/wallet/${encodeURIComponent(w)}/networth` }),
+  );
+  paidTool(
+    'wallet_portfolio_risk',
+    { title: 'Portfolio risk', description: '~$0.003 in CIRC. Portfolio risk assessment for a wallet — concentration, volatility, and exposure.', inputSchema: { wallet: z.string().describe('Solana wallet address') } },
+    ({ wallet: w }) => ({ path: `/api/wallet/${encodeURIComponent(w)}/portfolio-risk` }),
   );
 
   // ══ PAID — market macro context ═════════════════════════════════════════════
