@@ -8,7 +8,7 @@
 // call auto-pays CIRC to the Circuit treasury, capped per call. Free tools need no wallet. This is the
 // "bring-your-own-wallet" MCP — drop it into Claude Desktop / an agent runtime, fund a CIRC wallet, done.
 //
-// Surface: 43 data tools (14 free) + dllm_chat (decentralized LLM inference, paid) + pay_settle, 3 guided
+// Surface: 52 data tools (14 free) + dllm_chat (decentralized LLM inference, paid) + pay_settle, 3 guided
 // prompts, and 5 free ambient resources. The differentiator is the swarm_* family — live signal/consensus/
 // leaderboard/holdings/blacklist from Circuit's running agent fleet, data no generic price API has. Every
 // tool is READ-ONLY (a fetch or an inference generation); the only side effect is the micropayment.
@@ -139,7 +139,7 @@ export function buildServer(opts = {}) {
     baseUrl: env.CIRCUIT_DATA_URL || undefined,
   });
 
-  const server = new McpServer({ name: 'circuit-data', version: '0.5.0' });
+  const server = new McpServer({ name: 'circuit-data', version: '0.5.1' });
 
   const asText = (o) => ({ content: [{ type: 'text', text: typeof o === 'string' ? o : JSON.stringify(o, null, 2) }] });
   const asError = (m) => ({ content: [{ type: 'text', text: `Error: ${m}` }], isError: true });
@@ -544,6 +544,55 @@ export function buildServer(opts = {}) {
     'market_overview',
     { title: 'Market overview', description: '~$0.002 in CIRC. Broad market snapshot: total cap, volume, BTC/SOL dominance, and top movers.', inputSchema: {} },
     () => ({ path: '/api/market-overview' }),
+  );
+
+  // ══ PAID — NFT markets (Tensor, computed on-chain) ══════════════════════════
+  // Tensor floors / listings / bids / arb, self-served by circuit-node from the gRPC firehose — no
+  // third-party marketplace API. Keyed by verified-collection address, mint, or wallet.
+  paidTool(
+    'nft_market',
+    { title: 'NFT market snapshot', description: '~$0.002 in CIRC. Global Solana NFT market: indexed collections, total listings, how many collections have standing bids, live arb count, and median/cheapest floor. Read this before drilling into a collection.', inputSchema: {} },
+    () => ({ path: '/api/nft/market' }),
+  );
+  paidTool(
+    'nft_floors',
+    { title: 'NFT collection floors', description: "~$0.003 in CIRC. Every indexed Tensor collection's floor (SOL) and open-listing count. sort: 'listed' = most liquid (default), 'floor' = cheapest, '-floor' = priciest.", inputSchema: { limit: z.number().int().max(500).optional().describe('max collections (default 50)'), sort: z.enum(['listed', 'floor', '-floor']).optional() } },
+    ({ limit, sort }) => ({ path: '/api/nft/floors', query: { limit, sort } }),
+  );
+  paidTool(
+    'nft_collection',
+    { title: 'NFT collection detail', description: '~$0.003 in CIRC. One collection: floor, listed count, cheapest open listings, best standing bid, royaltyBps, and netSpreadSol (after royalty + fees). Keyed by verified-collection address.', inputSchema: { collection: z.string().describe('verified-collection address'), listings: z.number().int().max(100).optional().describe('cheapest listings to include (default 20)') } },
+    ({ collection, listings }) => ({ path: `/api/nft/collection/${encodeURIComponent(collection)}`, query: { listings } }),
+  );
+  paidTool(
+    'nft_arb',
+    { title: 'NFT arbitrage scan', description: '~$0.005 in CIRC. Mark-to-market NFT arb: collections whose floor sits at/below the best standing collection bid, ranked by netSpreadSol (net of royalty + Tensor fees on both legs). Bids can be stale/thin — verify before acting.', inputSchema: { minSpreadSol: z.number().optional().describe('min gross floor→bid spread in SOL (default 0)'), limit: z.number().int().max(200).optional().describe('max opportunities (default 50)') } },
+    ({ minSpreadSol, limit }) => ({ path: '/api/nft/arb', query: { minSpreadSol, limit } }),
+  );
+  paidTool(
+    'nft_asset',
+    { title: 'Inspect an NFT', description: '~$0.002 in CIRC. One NFT by mint: is it listed and at what price, its collection (+ name), the collection floor, the best standing bid, and whether it can be sold into that bid.', inputSchema: { mint: z.string().describe('NFT mint address') } },
+    ({ mint }) => ({ path: `/api/nft/asset/${encodeURIComponent(mint)}` }),
+  );
+  paidTool(
+    'nft_bids',
+    { title: 'NFT bid depth', description: '~$0.003 in CIRC. Full standing collection-bid depth (highest first) — the offers you could sell into. Use to judge how deep/real the bid side is before trusting an arb.', inputSchema: { collection: z.string().describe('verified-collection address'), limit: z.number().int().max(200).optional().describe('max bids (default 50)') } },
+    ({ collection, limit }) => ({ path: `/api/nft/bids/${encodeURIComponent(collection)}`, query: { limit } }),
+  );
+  paidTool(
+    'nft_search',
+    { title: 'Find an NFT collection', description: '~$0.002 in CIRC. Resolve a collection by NAME (e.g. "Mad Lads") to its on-chain address, with floor + listing count. Use first when a user names a collection.', inputSchema: { q: z.string().describe('collection name, min 2 chars'), limit: z.number().int().max(100).optional().describe('max matches (default 20)') } },
+    ({ q, limit }) => ({ path: '/api/nft/search', query: { q, limit } }),
+  );
+  paidTool(
+    'nft_sales',
+    { title: 'NFT collection activity', description: '~$0.003 in CIRC. Recent listing ACTIVITY for a collection (fills/delists at last price, + avg/median) — a velocity/liquidity read, NOT confirmed sale prices.', inputSchema: { collection: z.string().describe('verified-collection address'), limit: z.number().int().max(100).optional().describe('max events (default 50)') } },
+    ({ collection, limit }) => ({ path: `/api/nft/sales/${encodeURIComponent(collection)}`, query: { limit } }),
+  );
+  paidTool(
+    'wallet_nfts',
+    { title: 'Wallet NFT portfolio', description: "~$0.005 in CIRC. A wallet's NFTs with floor mark-to-market total (a lower bound — trait-rare items are worth more). Use to value or manage an NFT portfolio.", inputSchema: { owner: z.string().describe('wallet address'), limit: z.number().int().max(500).optional().describe('max NFTs to detail (default 200)') } },
+    ({ owner, limit }) => ({ path: `/api/nft/wallet/${encodeURIComponent(owner)}`, query: { limit } }),
   );
 
   // ══ PAID — decentralized LLM inference (Circuit DLLM, x402) ═════════════════

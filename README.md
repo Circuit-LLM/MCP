@@ -80,6 +80,15 @@ Then ask your agent *"what's the swarm's consensus on this mint?"* or *"audit th
 | `market_regime` | ~$0.002 | risk-on/risk-off macro read |
 | `market_sentiment` | ~$0.002 | fear/greed gauge |
 | `market_overview` | ~$0.002 | broad market snapshot + top movers |
+| `nft_market` | ~$0.002 | global NFT market snapshot — collections, listings, bid coverage, arb count, median floor |
+| `nft_floors` | ~$0.003 | all Tensor collection floors + listing counts, sortable |
+| `nft_collection` | ~$0.003 | one collection: floor, cheapest listings, top bid, royalty, net spread |
+| `nft_arb` | ~$0.005 | mark-to-market NFT arb — floor ≤ best bid, ranked by net spread |
+| `nft_asset` | ~$0.002 | inspect one NFT by mint (listed?, price, floor, sellable-into-bid) |
+| `nft_bids` | ~$0.003 | full standing collection-bid depth (highest first) |
+| `nft_search` | ~$0.002 | resolve a collection by name → on-chain address + floor |
+| `nft_sales` | ~$0.003 | recent listing activity (velocity read, not confirmed sales) |
+| `wallet_nfts` | ~$0.005 | a wallet's NFTs + floor mark-to-market total |
 
 Prices are live from `circuit_quote` (`/api/quote`); a few paid endpoints are intermittently ungated (free).
 
