@@ -5,7 +5,7 @@
 **Give any AI agent Circuit's real-time Solana data and agent-swarm intelligence as tools — auto-paid per call in CIRC over x402. No API keys, no signup. Add it to Claude Desktop, Claude Code, or any agent runtime with one line.**
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://www.npmjs.com/package/@circuit-llm/mcp)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue)](https://www.npmjs.com/package/@circuit-llm/mcp)
 [![MCP](https://img.shields.io/badge/MCP-server-blueviolet)](https://modelcontextprotocol.io)
 [![x402](https://img.shields.io/badge/x402-CIRC%20payments-gold)](https://x402.org)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
